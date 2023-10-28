@@ -1,0 +1,176 @@
+---
+title: "DESeq2"
+output: html_document
+date: "2023-07-25"
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Gene-level differential expression analysis using DESeq2
+
+# load libraries
+```{r}
+library(tidyverse)
+library(RColorBrewer)
+library(DESeq2)
+library(pheatmap)
+library(dplyr)
+library(rlang)
+library(stringr)
+library(ggplot2)
+library(ggrepel)
+library(RColorBrewer)
+```
+
+#load data
+
+Here the count tables are loaded along with the corresonding metadata of the experiment. Since the counttables here contain numbered genes rather than gene names, a separate file is given with correct translations to cyanobase IDs
+
+```{r}
+## read count data
+txt_files_ls = paste0("data/",list.files(path="data/", pattern="*.txt"))
+txt_files_df <- lapply(txt_files_ls, function(x) {
+  read.table(file = x, 
+             header = F, 
+             sep ="\t",
+             row.names = 1, 
+             col.names = c("genes", paste0("S",str_extract({{x}}, "\\d+"))))
+  })
+countData <- do.call("cbind", txt_files_df)
+countData <- filter(countData, !str_detect(rownames(countData),"_")) %>% 
+  filter(rowSums(.)>24)
+
+## translate gene IDs
+conv <- read.csv("meta/translate_genes.csv", row.names = 2)
+conv['gene2045',]$Final_name = 'sll0944a'
+countData <- merge(countData,conv['Final_name'],by='row.names') #genes decrease due to some gene numbers being rRNA having no biocyc ID
+rownames(countData) <- countData$Final_name
+countData <- countData[,!names(countData)%in%c("Final_name","Row.names")]
+KO <- c("sll0404","slr0806","slr1556","sll0587","slr0721","slr0301","sll0107")
+countData <- countData[!rownames(countData) %in% KO,] #remove knocked out genes
+
+## load metadata
+meta <- read.table("meta/meta.txt", header=T)
+
+```
+
+
+#quality control
+
+first we plot the count distribution, it is expected to observe a gamma distribution.
+
+```{r}
+ggplot(countData) +
+  geom_histogram(aes(x=S01),stat = "bin", bins = 200) +
+  xlim(-5, 5000)  +
+  xlab("Raw expression counts") +
+  ylab("Number of genes")
+```
+
+next we look at the mean vs the variance, it is expected to see the variance increase with respect to the mean as the mean increases.
+
+```{r}
+mean_counts <- apply(countData, 1, mean)
+variance_counts <- apply(countData, 1, var)
+df <- data.frame(mean_counts, variance_counts)
+
+ggplot(df) +
+        geom_point(aes(x=mean_counts, y=variance_counts)) + 
+        geom_line(aes(x=mean_counts, y=mean_counts, color="red")) +
+        scale_y_log10() +
+        scale_x_log10()
+```
+
+make a DESeq2 matrix which can be normalised and used to observe variation (PCA) and correlation (heatmap) between samples 
+
+```{r}
+dds <- DESeqDataSetFromMatrix(countData=countData, 
+                              colData=meta, 
+                              design=~strain)
+```
+
+```{r}
+#normalise with respect to library size and apply log2 scale
+rld <- rlog(dds, blind=TRUE) 
+	
+# Plot PCA 
+plotPCA(rld, intgroup="strain") + 
+  geom_label(aes(label = rld@colData@rownames)) + 
+  xlim(-10,12) +
+  ylim(-5,5)
+ 
+# plot heatmap
+rld_mat <- assay(rld) #Extract the rlog matrix from the object
+rld_cor <- cor(rld_mat)  #Compute pairwise correlation values
+pheatmap(rld_cor)
+
+```
+
+## differential expression analysis
+
+create deseq2 object and extract the normalized count table and fold changes
+```{r}
+dds <- DESeq(dds)
+normalized <- as.data.frame(counts(dds, normalized=TRUE))
+res <- results(dds)
+head(results(dds, tidy=TRUE))
+summary(res)
+
+## Turn the results object into a data frame
+res_df <- data.frame(res)
+
+## Subset the significant results
+sig_res <- filter(res_df, padj < 0.05)
+
+```
+
+plot dispersion
+```{r}
+plotDispEsts(dds)
+```
+
+plot a vulconaplot
+
+```{r}
+My_Theme = theme(
+  axis.title.x = element_text(size = 15),
+  axis.text.x = element_text(size = 16),
+  axis.title.y = element_text(size = 15),
+  )
+
+x <- res_df
+x$lab <- ""
+x$sign <- NA
+x$lab[abs(x$log2FoldChange) >= 1 & x$padj<0.05] <- "sig_large"
+x$sign[abs(x$log2FoldChange) >= 1 & x$padj<0.05] <- rownames(x[abs(x$log2FoldChange) >= 2 & x$padj<0.05,])
+x$lab[abs(x$log2FoldChange) < 1 & x$padj<0.05] <- "sig_small"
+x$lab[x$padj>=0.05] <- "not_sig"
+
+ggplot(data=x, aes(x=log2FoldChange, y=-log10(pvalue),col=lab,label=x$sign)) + geom_point() + scale_color_manual(values=c("black","red","blue")) + My_Theme
+```
+
+
+test for enriched gene sets
+```{r}
+library(clusterProfiler)
+gene <- res_df[,"log2FoldChange"]
+names(gene) <- row.names(res_df)
+gene<-na.omit(gene)
+gene <- sort(gene, decreasing = TRUE)
+
+kk <- gseKEGG(geneList     = gene,
+               organism     = 'syn',
+               minGSSize    = 120,
+               pvalueCutoff = .1,
+               verbose      = FALSE)
+
+dotplot(kk)
+
+```
+
+
+
