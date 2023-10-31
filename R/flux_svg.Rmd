@@ -1,0 +1,78 @@
+---
+title: "metabolism"
+output: html_document
+date: "2023-06-20"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = "C:/Users/svdz/OneDrive/Bureaublad/UvA/Metabolism Figure")
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+load libraries
+
+```{r load_libs, cache=FALSE}
+#library(tidyverse)
+library(stringr)
+library(dplyr)
+library(magick)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(rsvg)
+library(fluctuator)
+```
+
+## Read data
+
+```{r}
+
+SVG <- read_svg("v1.svg")
+flux <- read.csv("all_sig.csv")
+
+```
+
+## alter flux values
+```{r}
+
+flux <- flux[, colSums(is.na(flux))==0]
+```
+
+
+## create colour palette
+
+```{r}
+pal <- colorRampPalette(c("#ff0000", "#0000ff"))(20)
+```
+
+
+```{r}
+
+current = flux[,c("X","log2FoldChange")]
+current <- current %>%
+      mutate(
+        stroke_color = log2FoldChange %>% {10 + (20*(./((max(abs(.)))*2)))} %>% round,
+        stroke_color_rgb = pal[stroke_color])
+
+SVG <- set_attributes(SVG,
+                      node = current$X, attr = "style",
+                      pattern = "stroke:#[A-Z0-9]+",
+                      replacement = paste0("stroke:", current$stroke_color_rgb))
+
+write_svg(SVG, file = "counts.svg")
+ 
+```
+
+# create knockout figures
+
+```{r}
+d7 <- c("sll0404","slr0806","slr1556","sll0587","slr0721","slr0301","sll0107")
+
+SVG <- set_attributes(SVG,
+                         node = d7, attr = "style",
+                         pattern = "stroke:#[A-Z0-9]+",
+                         replacement = "stroke:#FF0000")
+
+write_svg(SVG, file = paste0("mutant.svg"))
+
+```

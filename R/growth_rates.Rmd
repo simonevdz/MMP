@@ -1,0 +1,214 @@
+---
+title: "mu_estimation"
+output: html_document
+date: "2023-06-27"
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## load packages
+
+
+```{r }
+library("readxl")
+library("tidyverse")
+library(gridExtra)
+library(gtable)
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(baseline)
+library(zoo)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(knitr)
+library(cli)
+library(lubridate)
+```
+
+## get data and functions
+
+```{r }
+
+source("C:/Users/svdz/OneDrive/Bureaublad/UvA/mu_functions.R")
+my_data <- read_excel("C:/Users/svdz/OneDrive/Bureaublad/ODmeasurements.xlsx")
+my_data <- my_data %>% mutate(hour = as.numeric((datetime-min(datetime))/(60*60)))
+my_data <- my_data %>% mutate(logOD = log(OD))
+
+```
+
+
+## plot growth curves
+
+```{r }
+p <- ggplot(my_data, aes(x=hour, y=logOD, group=channel, color= strain)) +
+  geom_point() +
+  #geom_smooth(se=FALSE) +
+  geom_line() +
+  xlab("time (h)")
+p
+
+```
+
+## Calculate mu by rolling fits using linear models
+
+```{r, include=FALSE}
+
+data.growth.total.strain <- my_data %>% 
+  group_by(strain) %>% 
+  arrange(hour) %>% 
+  do(
+    rolling.fit(., 3)
+  )
+
+data.growth.total.channel <- my_data %>% 
+  group_by(channel,strain) %>% 
+  arrange(hour) %>% 
+  do(
+    rolling.fit(., 1)
+  )
+
+
+```
+
+
+## 
+
+```{r }
+
+data.growth.total.strain %>% 
+  ggplot(aes(x = time_median, y = fit_size, colour = r_sq)) +
+  # geom_boxplot() +
+  geom_point() +
+  scale_colour_gradient(name = expression(R^2), high = "green", low="red", limits = c(0.9, 1), guide = guide_colorbar(barwidth = 11, barheight = 0.5)) +
+  facet_wrap(~strain, ncol = 4) +
+  theme(axis.text.x = element_text(angle=90, vjust=1), legend.position = "bottom") +
+  # scale_fill_discrete(name = "Fit size") +
+  xlab("Median fit time") +
+  ylab("Fit size")
+
+
+data.growth.total.channel %>% 
+  ggplot(aes(x = time_median, y = fit_size, colour = r_sq)) +
+  # geom_boxplot() +
+  geom_point() +
+  scale_colour_gradient(name = expression(R^2), high = "green", low="red", limits = c(0.9, 1), guide = guide_colorbar(barwidth = 11, barheight = 0.5)) +
+  facet_wrap(~channel, ncol = 4) +
+  theme(axis.text.x = element_text(angle=90, vjust=1), legend.position = "bottom") +
+  # scale_fill_discrete(name = "Fit size") +
+  xlab("Median fit time") +
+  ylab("Fit size")
+
+```
+
+
+
+
+```{r }
+data.growth.total.strain %>% 
+  ggplot(aes(x = slope, y = fit_size, colour = r_sq)) +
+  # geom_boxplot() +
+  geom_point() +
+  scale_colour_gradient(name = expression(R^2), high = "green", low="red", limits = c(0.9, 1), guide = guide_colorbar(barwidth = 11, barheight = 0.5)) +
+  facet_wrap(~strain, ncol = 4) +
+  theme(axis.text.x = element_text(angle=90, vjust=1), legend.position = "bottom") +
+  # scale_fill_discrete(name = "Fit size") +
+  xlab("Growth rate") +
+  ylab("Fit size")
+
+
+data.growth.total.channel %>% 
+  ggplot(aes(x = slope, y = fit_size, colour = r_sq)) +
+  # geom_boxplot() +
+  geom_point() +
+  scale_colour_gradient(name = expression(R^2), high = "green", low="red", limits = c(0.9, 1), guide = guide_colorbar(barwidth = 11, barheight = 0.5)) +
+  facet_wrap(~channel, ncol = 4) +
+  theme(axis.text.x = element_text(angle=90, vjust=1), legend.position = "bottom") +
+  # scale_fill_discrete(name = "Fit size") +
+  xlab("Growth rate") +
+  ylab("Fit size")
+
+```
+
+
+```{r}
+
+p1 <- ggplot(filter(data.growth.total.channel, fit_size==4), aes(x=time_median, y=slope, group=channel, colour=strain,label = round(r_sq,3))) +
+  #xlim(15,50) +
+  facet_wrap(~fit_size) +
+  #geom_point() +
+  geom_line() +
+  #geom_text(hjust=0, vjust=0) +
+  #geom_smooth(se=FALSE) +
+  xlab("time")
+p1
+
+
+```
+
+
+
+```{r}
+
+strategies <- list(
+  # squeeze( data, sort_by=c("desc(r_sq)", ...))
+  list( name="max_fit", FUN = "squeeze", args = list(sort_by=~desc(fit_size))),
+  list( name="max_rsq", FUN = "squeeze", args = list(sort_by=~desc(r_sq))),
+  # squeeze( data %>% mutate(r_sq = round(r_sq, 2)), sort_by=c("desc(r_sq)", "desc(fit_size)"), ...)
+  list( name="max_rsq_round_2", FUN = "max_rsq_round", args=list(digits=2)),
+  # max_rsq( data, filters=c("r_sq > 0.99"), ...)
+  list( 
+    name="max_fit_rsq_above_99", 
+    FUN="squeeze", 
+    args=list(sort_by=~desc(fit_size), filters=~r_sq > 0.99)),
+  list( 
+    name="max_fit_rsq_above_98", 
+    FUN="squeeze", 
+    args=list(sort_by=~desc(fit_size), filters=~r_sq > 0.98)),
+  list( 
+    name="max_fit_rsq_above_95", 
+    FUN="squeeze", 
+    args=list(sort_by=~desc(fit_size), filters=~r_sq > 0.95)),
+  list( FUN="best_consensus_mu"),
+  list( FUN="score_fit")
+)
+
+
+```
+
+
+
+```{r}
+## filter growth rate fits based on criteria
+data.best.growth.strain <- filter.best.fit(
+  as.data.frame(data.growth.total.strain, stringsAsFactors=F) %>% group_by(strain), 
+  strategies = strategies
+)
+
+data.best.growth.channel <- filter.best.fit(
+  as.data.frame(data.growth.total.channel, stringsAsFactors=F) %>% group_by(channel), 
+  strategies = strategies
+)
+
+```
+
+
+
+```{r}
+
+plot <- (filter(data.growth.total.channel, fit_size == 4, between(time_median,30,40)))
+
+
+
+
+```
+
+
+
+
+
